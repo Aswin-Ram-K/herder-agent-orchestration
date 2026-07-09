@@ -653,3 +653,24 @@ herdr notification show "<title>" --body "<text>" --sound <done|request|none>
    `idle` when stuck, causing silent hangs in your pipeline.
 10. **Alert at milestones, not per-step.** One notification when the fleet is done or
     the first agent is blocked. Not after every sub-task completes.
+
+---
+
+## Reference Files
+
+For deep dives, see the reference files in this skill's `references/` directory:
+
+- **`references/pane-orchestration.md`** — Tab-internal pane layout design, sizing, and
+  arrangement patterns. When to use 2/3/4 panes, resize mid-run, and common mistakes.
+- **`references/sub-agent-design.md`** — How to design sub-tasks, brief sub-agents,
+  manage them during execution, and handle handoffs between agents.
+- **`references/tab-management.md`** — Single-tab vs multi-tab orchestration, tab creation
+  during orchestration, and tab best practices.
+- **`references/monitoring.md`** — Real-time monitoring, the triage loop, state-based
+  alerting, and stalled detection.
+- **`references/failure-handling.md`** — 8 failure modes (stuck agents, wrong state,
+  collisions, pipeline breaks, cascade failures), recovery strategies, and escalation
+  framework.
+
+**When you need more detail than this master skill provides, read the appropriate
+reference file. This skill is your quick-reference; the references are your deep-dive.**
