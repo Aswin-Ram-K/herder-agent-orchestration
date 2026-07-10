@@ -354,15 +354,23 @@ def test_quick_ref_separates_identify_from_modify():
         )
 
     # Find the Quick Reference section (use ^## with MULTILINE to avoid ### false matches)
-    quick_ref = re.search(r"^## Part 7.*?(?=^## |\Z)", content, re.DOTALL | re.MULTILINE)
+    quick_ref = re.search(
+        r"^## Part 7.*?(?=^## |\Z)", content, re.DOTALL | re.MULTILINE
+    )
     if not quick_ref:
         raise AssertionError("Part 7 — Quick Reference not found")
 
     section = quick_ref.group(0)
 
     # Must have both IDENTIFY and MODIFY subsections
-    has_identify_sub = re.search(r"IDENTIFY.*Command|Query.*Modify", section, re.IGNORECASE) is not None
-    has_modify_sub = re.search(r"Modify.*Command|After.*IDENTIFY.*VERIFY", section, re.IGNORECASE) is not None
+    has_identify_sub = (
+        re.search(r"IDENTIFY.*Command|Query.*Modify", section, re.IGNORECASE)
+        is not None
+    )
+    has_modify_sub = (
+        re.search(r"Modify.*Command|After.*IDENTIFY.*VERIFY", section, re.IGNORECASE)
+        is not None
+    )
 
     if not (has_identify_sub and has_modify_sub):
         raise AssertionError(

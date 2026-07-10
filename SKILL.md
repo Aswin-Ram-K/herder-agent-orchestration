@@ -360,7 +360,24 @@ herdr workspace list --json
 #   herdr pane close <stray-pane>   (for each stray pane, one at a time)
 #   THEN close the workspace only after all panes are gone
 
-# 3. ACT — deploy panes using the flat-split pattern (see §2.2)
+# 3. ACT — deploy panes using the flat-split pattern
+#    (all panes split from YOUR pane, flat structure)
+YOUR_PANE=$(herdr pane current --json | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+
+PANE_A=$(herdr pane split "$YOUR_PANE" --direction right --no-focus \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+PANE_B=$(herdr pane split "$YOUR_PANE" --direction right --no-focus \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+PANE_C=$(herdr pane split "$YOUR_PANE" --direction right --no-focus \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+
+# Brief each agent with its disjoint task
+herdr agent start "$PANE_A" --name "agent-a" --session "fanout-a" \
+  herdr agent send "agent-a" "<brief for agent A: disjoint task>"
+herdr agent start "$PANE_B" --name "agent-b" --session "fanout-b" \
+  herdr agent send "agent-b" "<brief for agent B: disjoint task>"
+herdr agent start "$PANE_C" --name "agent-c" --session "fanout-c" \
+  herdr agent send "agent-c" "<brief for agent C: disjoint task>"
 ```
 
 **When to use:**
@@ -394,16 +411,43 @@ herdr agent list --json
 # Clean up any stale agents/panes before starting
 ```
 
-**What you do:**
+**ACT — deploy council members with disjoint perspective angles:**
 
-1. Brief each council member with the **same problem** but **different perspective angles**
-   - Member A: "Analyze from architecture perspective"
-   - Member B: "Analyze from security perspective"
-   - Member C: "Analyze from performance perspective"
-2. Wait for all to reach `done`
-3. Read each member's output
-4. Synthesize a recommendation in your pane (the judge)
-5. Report to the human
+```bash
+YOUR_PANE=$(herdr pane current --json   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+
+PANE_A=$(herdr pane split "$YOUR_PANE" --direction right --no-focus   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+PANE_B=$(herdr pane split "$YOUR_PANE" --direction right --no-focus   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+PANE_C=$(herdr pane split "$YOUR_PANE" --direction right --no-focus   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
+
+# Brief each council member with a unique angle — same problem, different lens
+herdr agent start "$PANE_A" --name "architect" --session "council-arch"
+herdr agent send "architect" "Analyze this problem from an architecture perspective: <problem>"
+
+herdr agent start "$PANE_B" --name "security" --session "council-sec"
+herdr agent send "security" "Analyze this problem from a security perspective: <problem>"
+
+herdr agent start "$PANE_C" --name "performance" --session "council-perf"
+herdr agent send "performance" "Analyze this problem from a performance perspective: <problem>"
+```
+
+**WAIT for all council members to reach `done`:**
+
+```bash
+herdr agent wait "architect" --status done --timeout 120000
+herdr agent wait "security" --status done --timeout 120000
+herdr agent wait "performance" --status done --timeout 120000
+```
+
+**VERIFY — read each output before synthesizing:**
+
+```bash
+herdr agent read "architect" --lines 50
+herdr agent read "security" --lines 50
+herdr agent read "performance" --lines 50
+```
+
+**Then** synthesize a recommendation in your pane (the judge) and report to the human.
 
 **Cost:** N× tokens for one answer. Only use when the decision quality matters enough.
 
