@@ -11,21 +11,28 @@ import os
 import re
 import sys
 
-SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Test against the installed skill, not the repo copy
+SKILL_DIR = os.path.expanduser("~/.pi/agent/skills/herder-agent-orchestration")
+
+
+def _read_skill():
+    path = os.path.join(SKILL_DIR, "SKILL.md")
+    if not os.path.isfile(path):
+        raise AssertionError(f"SKILL.md not found at {path}")
+    with open(path) as f:
+        return f.read()
 
 
 def test_skill_exists():
     """SKILL.md must exist."""
-    skill_path = os.path.join(SKILL_DIR, "SKILL.md")
-    assert os.path.isfile(skill_path), f"SKILL.md not found at {skill_path}"
+    path = os.path.join(SKILL_DIR, "SKILL.md")
+    assert os.path.isfile(path), f"SKILL.md not found at {path}"
     print("  OK  SKILL.md exists")
-    return skill_path
 
 
-def test_frontmatter(skill_path):
+def test_frontmatter():
     """SKILL.md must have valid YAML frontmatter with name and description."""
-    with open(skill_path) as f:
-        raw = f.read()
+    raw = _read_skill()
 
     if not raw.startswith("---"):
         raise AssertionError("SKILL.md missing YAML frontmatter (--- markers)")
@@ -75,26 +82,22 @@ def test_frontmatter(skill_path):
     if current_key and current_value:
         fm[current_key] = " ".join(current_value)
 
-    if "name" not in fm:
-        raise AssertionError("Frontmatter missing 'name' field")
-    if "description" not in fm:
-        raise AssertionError("Frontmatter missing 'description' field")
-
+    assert "name" in fm, "Frontmatter missing 'name' field"
+    assert "description" in fm, "Frontmatter missing 'description' field"
     print(f"  OK  Frontmatter: name='{fm['name']}'")
     return fm
 
 
-def test_reference_files(fm):
-    """All referenced reference files must exist. Returns the set of refs."""
-    with open(os.path.join(SKILL_DIR, "SKILL.md")) as f:
-        skill_content = f.read()
-
+def test_reference_files():
+    """All referenced reference files must exist."""
+    skill_content = _read_skill()
     ref_pattern = r"references/[\w-]+\.md"
     refs = set(re.findall(ref_pattern, skill_content))
 
-    if not refs:
-        raise AssertionError("No reference files found in skill. "
-                           "The skill references reference files but none exist.")
+    assert refs, (
+        "No reference files found in skill. "
+        "The skill references reference files but none exist."
+    )
 
     print(f"  OK  Found {len(refs)} referenced files")
 
@@ -104,46 +107,47 @@ def test_reference_files(fm):
         if not os.path.isfile(ref_path):
             missing.append(ref)
 
-    if missing:
-        raise AssertionError(f"Referenced files not found: {missing}")
-
+    assert not missing, f"Referenced files not found: {missing}"
     print("  OK  All referenced files exist")
     return refs
 
 
-def test_reference_file_structure(refs):
+def test_reference_file_structure():
     """Each reference file should have a heading and content."""
+    refs = test_reference_files()
+
     for ref in sorted(refs):
         path = os.path.join(SKILL_DIR, ref)
         with open(path) as f:
             content = f.read()
 
-        if not re.search(r"^#", content, re.MULTILINE):
-            raise AssertionError(f"{ref} has no heading (must start with #)")
-
-        if len(content.strip()) < 100:
-            raise AssertionError(
-                f"{ref} has suspiciously little content ({len(content)} bytes)")
-
+        assert re.search(r"^#", content, re.MULTILINE), (
+            f"{ref} has no heading (must start with #)"
+        )
+        assert len(content.strip()) >= 100, (
+            f"{ref} has suspiciously little content ({len(content)} bytes)"
+        )
         print(f"  OK  {ref}: {len(content)} bytes, has heading")
 
 
 def test_no_broken_internal_links():
-    """Check that Markdown links to files within the repo resolve."""
-    with open(os.path.join(SKILL_DIR, "SKILL.md")) as f:
-        skill_content = f.read()
+    """Check that Markdown links to files within the skill resolve."""
+    skill_content = _read_skill()
 
     link_pattern = r"\]\(references/[\w-]+\.md\)"
     links = re.findall(link_pattern, skill_content)
     if links:
         print(f"  OK  {len(links)} internal reference links in SKILL.md")
 
-    with open(os.path.join(SKILL_DIR, "README.md")) as f:
-        readme_content = f.read()
-
-    readme_links = re.findall(r"\]\(references/[\w-]+\.md\)", readme_content)
-    if readme_links:
-        print(f"  OK  {len(readme_links)} internal reference links in README.md")
+    readme_path = os.path.join(SKILL_DIR, "README.md")
+    if os.path.isfile(readme_path):
+        with open(readme_path) as f:
+            readme_content = f.read()
+        readme_links = re.findall(r"\]\(references/[\w-]+\.md\)", readme_content)
+        if readme_links:
+            print(f"  OK  {len(readme_links)} internal reference links in README.md")
+    else:
+        print("  OK  No README.md (optional)")
 
 
 def main():
@@ -152,10 +156,10 @@ def main():
     print("=" * 60)
 
     try:
-        skill_path = test_skill_exists()
-        fm = test_frontmatter(skill_path)
-        refs = test_reference_files(fm)
-        test_reference_file_structure(refs)
+        test_skill_exists()
+        test_frontmatter()
+        test_reference_files()
+        test_reference_file_structure()
         test_no_broken_internal_links()
 
         print()
@@ -175,6 +179,7 @@ def main():
         print(f"ERROR {e}")
         print("=" * 60)
         import traceback
+
         traceback.print_exc()
         return 1
 

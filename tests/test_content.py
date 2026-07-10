@@ -10,7 +10,8 @@ import os
 import re
 import sys
 
-SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Test against the installed skill
+SKILL_DIR = os.path.expanduser("~/.pi/agent/skills/herder-agent-orchestration")
 
 
 def read_file(path):
@@ -23,11 +24,11 @@ def test_all_scenarios_present():
     skill_content = read_file(os.path.join(SKILL_DIR, "SKILL.md"))
 
     scenarios = [
-        "Scenario A",   # Single-Agent
-        "Scenario B",   # Parallel Fan-Out
-        "Scenario C",   # Council
-        "Scenario D",   # Pipeline / Review Chain
-        "Scenario E",   # Manager / Workers
+        "Scenario A",  # Single-Agent
+        "Scenario B",  # Parallel Fan-Out
+        "Scenario C",  # Council
+        "Scenario D",  # Pipeline / Review Chain
+        "Scenario E",  # Manager / Workers
     ]
 
     for scenario in scenarios:
@@ -87,7 +88,9 @@ def test_herdr_env_check():
     skill_content = read_file(os.path.join(SKILL_DIR, "SKILL.md"))
 
     if "HERDR_ENV" not in skill_content:
-        raise AssertionError("Skill must check HERDR_ENV to detect if running inside herdr")
+        raise AssertionError(
+            "Skill must check HERDR_ENV to detect if running inside herdr"
+        )
 
     print("✓ HERDR_ENV check present")
 
@@ -115,7 +118,9 @@ def test_reference_file_consistency():
     # Check for unreferenced reference files
     extra = existing_refs - refs
     if extra:
-        print(f"  ℹ️  {len(extra)} reference file(s) not referenced in SKILL.md: {extra}")
+        print(
+            f"  ℹ️  {len(extra)} reference file(s) not referenced in SKILL.md: {extra}"
+        )
 
 
 def test_monitoring_commands():
@@ -170,7 +175,10 @@ def test_design_principles():
     """Skill must have design principles."""
     skill_content = read_file(os.path.join(SKILL_DIR, "SKILL.md"))
 
-    if "design principle" in skill_content.lower() or "best practice" in skill_content.lower():
+    if (
+        "design principle" in skill_content.lower()
+        or "best practice" in skill_content.lower()
+    ):
         print("✓ Design principles present")
     else:
         # Check for numbered principles (1-10)

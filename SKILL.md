@@ -30,18 +30,66 @@ The human watches **one tab** that shows:
 - Each sub-agent's work (sub-agent panes, right side)
 - Everything visible at a glance. No tab-switching.
 
-## Prerequisite
+---
 
-Check `HERDR_ENV`. If it is not set, you are **not** inside herdr. You cannot inspect or
-control panes. Say so, stop, and offer manual guidance using the patterns below.
+# THE GOLDEN RULE: IDENTIFY → VERIFY → ACT
+
+**Before every single herdr command that modifies state, you MUST first identify
+the current state, verify your target, then act.**
+
+This is not optional. This is the difference between working orchestration and
+destroying a live session.
 
 ```
-If HERDR_ENV is not set → "I'm outside herdr. I can't manage panes, but here's
-exactly what to run to set up this orchestration pattern:"
+IDENTIFY: Query the current state (workspace, tab, pane, agent)
+VERIFY:   Confirm the result matches your target
+ACT:      Only then perform the modification
 ```
 
-When `HERDR_ENV` is set, proceed. All commands below use the herdr CLI.
-Confirm exact spellings live when in doubt (`herdr --help`, `herdr workspace --help`, etc.).
+**Never assume** a workspace, tab, or pane exists. **Never guess** an ID. **Never
+create a new workspace when the current one is sufficient.**
+
+Every operation follows this pattern. The snippets below are your complete playbook.
+
+---
+
+## Part 0 — Operational Discipline
+
+### Rule 1: Always Query Before You Modify
+
+| Operation | IDENTIFY Command |
+|-----------|-----------------|
+| Create a pane | `herdr pane list --workspace <wid>` (or `--current` if in herdr) |
+| Create a tab | `herdr tab list --workspace <wid>` |
+| Create a workspace | `herdr workspace list` |
+| Start a sub-agent | `herdr agent list --json` (check if name is taken) |
+| Resize a pane | `herdr pane layout --pane <pid>` (check current size) |
+| Close a pane/tab/WS | **NEVER** close anything without first reading its contents |
+
+### Rule 2: Use the Current Workspace/Tab by Default
+
+When you are already inside herdr (`HERDR_ENV=1`), your current workspace and tab
+are the correct target. **Do not create new ones unless explicitly needed.**
+
+- `--workspace` + `--no-focus` → creates a **new** workspace (use sparingly)
+- `--no-focus` on tabs/panes → creates in the **current** workspace/tab (default use case)
+- `--current` → targets the pane/tab you are currently in
+
+### Rule 3: Never Close a Workspace Mid-Orchestration
+
+Closing a workspace destroys ALL panes, tabs, and running processes in it. This is
+the single most destructive operation in herdr.
+
+**Before closing any resource:**
+
+1. Check if any agents are still working/blocked inside it
+2. Confirm the human is ready for cleanup
+3. Close individual panes first, then tabs, then workspace — in that order
+
+### Rule 4: Always Use `--no-focus`
+
+Stealing the user's terminal focus on every command is disruptive. Use `--no-focus`
+on all create/split commands.
 
 ---
 
@@ -76,10 +124,11 @@ planning alongside every sub-agent's output.
 ```
 STEP 1: RECEIVE — Parse the human's task
 STEP 2: PLAN   — Decompose into sub-tasks, assign sub-agents
-STEP 3: DEPLOY — Create panes, spawn sub-agents, brief them
+STEP 3: DEPLOY — Identify current state → create panes → spawn sub-agents
 STEP 4: WAIT   — Monitor sub-agent states, route handoffs
 STEP 5: INTEGRATE — Collect outputs, synthesize results
 STEP 6: REPORT — Present results to the human
+STEP 7: CLEAN  — Close sub-agent panes only, leave orchestrator pane
 ```
 
 ---
@@ -88,82 +137,129 @@ STEP 6: REPORT — Present results to the human
 
 ### 2.1 Setting Up the Orchestrator Tab
 
-When you receive a task, the first thing you do is create (or confirm the existence of)
-a workspace and tab for orchestration.
-
-**If workspace doesn't exist:**
+**IDENTIFY first** — check the current workspace and tab situation:
 
 ```bash
-herdr workspace create --cwd /path/to/project --label "<task-name>" --no-focus
+# STEP 1: IDENTIFY — What workspaces and tabs already exist?
+herdr workspace list --json
 ```
 
-**Create the orchestration tab:**
+Parse the response:
+
+- Find the workspace that matches your task context (or determine if you need a new one)
+- Note the focused workspace and its active tab
+
+**IF a workspace already exists for this task:**
 
 ```bash
-herdr tab create --workspace <workspace-id> --label "orchestrator" --no-focus
+# STEP 2: IDENTIFY — What tabs exist in this workspace?
+herdr tab list --workspace <existing-workspace-id> --json
+
+# STEP 3: VERIFY — Does an "orchestrator" tab already exist?
+# If yes, reuse it. If no, create one in the existing workspace:
+herdr tab create --workspace <existing-workspace-id> --label "orchestrator" --no-focus
 ```
 
-**Focus it:**
+**IF no workspace exists (first orchestration):**
 
 ```bash
-herdr tab focus <workspace-id>:<tab-id>
+# Only create a new workspace when there is truly no existing workspace
+WORKSPACE_ID=$(herdr workspace create --cwd /path/to/project --label "<task-name>" --no-focus \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["workspace"]["workspace_id"])')
+
+herdr tab create --workspace "$WORKSPACE_ID" --label "orchestrator" --no-focus
+```
+
+**CRITICAL DECISION POINT:**
+
+```
+IF workspace_count > 0 AND task_context_matches → USE EXISTING WORKSPACE
+IF workspace_count == 0 OR no workspace matches → CREATE NEW WORKSPACE
+```
+
+**NEVER create a workspace if one already exists that can serve the purpose.**
+This was the mistake that destroyed the live session. Creating a new workspace
+abandons the current one and all its panes/agents.
+
+**Focus the orchestration tab:**
+
+```bash
+herdr tab focus <workspace-id>:<orchestrator-tab-id>
 ```
 
 At this point, you are the orchestrator — running in a pane in this tab.
 
 ### 2.2 Spawning Sub-Agent Panes (Right of You)
 
-For each sub-task, you create a pane **to the right** of your current pane, then deploy
-a sub-agent into it.
-
-**For a single sub-agent:**
+**IDENTIFY your pane and the workspace before splitting:**
 
 ```bash
-# Split right from your pane
+# STEP 1: IDENTIFY — what pane am I in? what workspace?
+herdr pane current --json
+```
+
+Parse the response to get:
+
+- `current_pane_id` — your pane
+- `workspace_id` — the workspace you're in
+- `tab_id` — the tab you're in
+
+**Deploy sub-agent panes within the SAME workspace and tab:**
+
+For a single sub-agent:
+
+```bash
+# STEP 2: IDENTIFY — confirm your pane exists and is the right one
+herdr pane list --workspace <workspace-id> --json
+
+# STEP 3: VERIFY — is your pane_id the same as current_pane_id from IDENTIFY step?
+# If yes, proceed. If no, re-identify (tab might have changed).
+
+# STEP 4: ACT — split from YOUR pane, not from any other pane
 SUB_PANE=$(herdr pane split <your-pane-id> --direction right --no-focus \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
 
-# Brief the sub-agent
 herdr pane run "$SUB_PANE" "<sub-agent-command>"
 ```
 
-**For multiple sub-agents (parallel fan-out):**
+For multiple sub-agents (parallel fan-out):
 
 ```bash
-# Split right
-A_PANE=$(herdr pane split <your-pane-id> --direction right --no-focus \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
-herdr pane run "$A_PANE" "<agent-a-command> --task '<task-a>'"
+# All panes split from YOUR pane (flat structure, all at same level)
+PANE_A=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
+PANE_B=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
+PANE_C=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
 
-# Split right again (this goes right of the first split, not yours)
-B_PANE=$(herdr pane split $A_PANE --direction right --no-focus \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
-herdr pane run "$B_PANE" "<agent-b-command> --task '<task-b>'"
-
-# Split right again
-C_PANE=$(herdr pane split $B_PANE --direction right --no-focus \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
-herdr pane run "$C_PANE" "<agent-c-command> --task '<task-c>'"
+herdr pane run "$PANE_A" "<agent-a-command>"
+herdr pane run "$PANE_B" "<agent-b-command>"
+herdr pane run "$PANE_C" "<agent-c-command>"
 ```
 
-> **Note:** Each successive `--direction right` splits off the rightmost pane created,
-> not your original pane. To create all panes directly from yours, track your pane's
-> ID and split from it each time, using the pane's right neighbor as the pivot:
->
-> ```bash
-> # Better: all panes directly right of yours
-> PANE_A=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
-> PANE_B=$(herdr pane split <your-pane-id> --direction right --no-focus ...)  # pushes A left
-> PANE_C=$(herdr pane split <your-pane-id> --direction right --no-focus ...)  # pushes A,B left
-> ```
->
-> This keeps all sub-agent panes at the same level, all right of you.
+**DO NOT chain splits** (`split A → split from A → split from that`) unless you need a
+nested layout. Flat splits (all from your pane) keep all sub-agent panes at the same
+level, all directly right of you.
+
+**IDENTIFY after creating all panes — verify the layout:**
+
+```bash
+# STEP 5: VERIFY — did all panes land in the right workspace/tab?
+herdr pane list --workspace <workspace-id> --json
+
+# Check:
+# - All new panes have the correct workspace_id
+# - All new panes are in the orchestration tab
+# - No panes ended up in a different workspace
+```
 
 ### 2.3 Naming Sub-Agents
 
 Always give each sub-agent a name. Pane IDs compact; agent names are durable.
 
 ```bash
+# STEP 1: VERIFY — is the name available?
+herdr agent list --json | grep -c "<agent-name>"
+
+# STEP 2: ACT — start with the name
 herdr agent start <pane-id> --name "<agent-label>" --session "<session-id>"
 ```
 
@@ -176,10 +272,18 @@ Named agents can be:
 ### 2.4 Pane Sizing
 
 Your orchestrator pane should be wide enough for the human to read your reasoning.
-After creating sub-agent panes, resize if needed:
+
+**IDENTIFY current layout before resizing:**
 
 ```bash
-# Give yourself more space (adjust ratio as needed)
+# STEP 1: IDENTIFY — current pane layout
+herdr pane layout --pane <your-pane-id> --json
+```
+
+**VERIFY the current ratio is too narrow, then ACT:**
+
+```bash
+# STEP 2: ACT — give yourself more space (only if needed)
 herdr pane resize <your-pane-id> --ratio 0.35
 ```
 
@@ -192,7 +296,7 @@ is appropriate — legibility degrades past ~3-4 panes in a tab.
 ## Part 3 — Deployment Scenarios (Built Into the Skill)
 
 Every orchestration scenario is a recipe in this skill. The agent reads the relevant
-section and executes it. No external config files needed.
+section and executes it using the IDENTIFY → VERIFY → ACT pattern.
 
 ### Scenario A: Single-Agent Task
 
@@ -209,6 +313,14 @@ TAB: "task-name"
 │  • Report back                     │
 │                                    │
 └────────────────────────────────────┘
+```
+
+**IDENTIFY first — confirm the workspace/tab state:**
+
+```bash
+herdr pane current --json
+herdr pane list --workspace <wid> --json
+# Verify: only your pane exists (no stray sub-agent panes from previous runs)
 ```
 
 **When to use:** Single sub-task, no collision risk, output is self-contained.
@@ -234,20 +346,28 @@ TAB: "task-name"
 └────────┴────────┴────────┴────────┘
 ```
 
+**IDENTIFY and VERIFY before deploying:**
+
+```bash
+# 1. IDENTIFY — current workspace, tab, pane
+herdr pane current --json
+herdr tab list --workspace <wid> --json
+
+# 2. VERIFY — ensure we're in the right workspace
+# If we created an orphan workspace in a previous run, close it first
+herdr workspace list --json
+# If workspace has stray panes from old runs:
+#   herdr pane close <stray-pane>   (for each stray pane, one at a time)
+#   THEN close the workspace only after all panes are gone
+
+# 3. ACT — deploy panes using the flat-split pattern (see §2.2)
+```
+
 **When to use:**
 
 - Sub-tasks are **independent** (no shared files)
 - Each sub-task touches **disjoint directories or files**
 - You want results faster by parallelizing
-
-**What you do:**
-
-1. Decompose the task into independent slices
-2. Deploy a sub-agent per slice (see §2.2)
-3. Brief each sub-agent with its specific scope
-4. Wait for all to reach `done`
-5. Integrate results in your pane
-6. Report
 
 **Critical rule:** If sub-tasks could collide (edit the same files), use **one agent**
 or **one worktree per agent** instead of fan-out.
@@ -266,11 +386,13 @@ TAB: "task-name"
 └────────┴────────┴────────┴────────┘
 ```
 
-**When to use:**
+**IDENTIFY — confirm no leftover council members from previous runs:**
 
-- High-stakes design decisions
-- Multiple valid approaches, need diverse perspectives
-- "Which approach is right?" type questions
+```bash
+herdr pane list --workspace <wid> --json
+herdr agent list --json
+# Clean up any stale agents/panes before starting
+```
 
 **What you do:**
 
@@ -299,30 +421,31 @@ TAB: "task-name"
 └────────┴───────────┴──────────┴────────┘
 ```
 
-**When to use:**
-
-- Implement → review → fix cycle
-- Any sequence where stage N+1 consumes stage N's output
-- Quality assurance via multiple passes
-
-**What you do:**
-
-1. Brief the implementer with the task
-2. Wait on implementer → `done`
-3. Read implementer's output
-4. Brief the reviewer: "Review the implementation by implementer. Focus on X."
-5. Wait on reviewer → `done`
-6. Read reviewer's output
-7. If review found issues, brief the fixer with the review findings
-8. Wait on fixer → `done`
-9. Read fixer's output
-10. Report results
-
-**Gating:** Each stage gates on the prior agent reaching `done`. Use:
+**IDENTIFY — each stage must wait for the prior:**
 
 ```bash
-herdr agent wait <agent-name> --status done --timeout 120000
+# Pipeline stage: implementer → reviewer → fixer
+
+# Stage 1: Deploy implementer
+IMPL_PANE=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
+herdr agent start "$IMPL_PANE" --name "implementer" --session "impl-sess"
+
+# Stage 2: WAIT for implementer before deploying reviewer
+herdr agent wait "implementer" --status done --timeout 120000
+
+# Stage 3: VERIFY implementer output before proceeding
+IMPL_OUTPUT=$(herdr agent read "implementer" --lines 100)
+# Check: does output look valid? Does it match the brief?
+# If no → fix or retry implementer before moving on
+# If yes → deploy reviewer
+
+# Stage 4: Deploy reviewer
+REV_PANE=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
+herdr agent start "$REV_PANE" --name "reviewer" --session "rev-sess"
+herdr agent send "reviewer" "Review this output: $IMPL_OUTPUT"
 ```
+
+**Gating:** Each stage gates on the prior agent reaching `done`.
 
 **Detection reliability:** Pipeline stages you gate on should use agents with reliable
 state reporting (Authority A agents — lifecycle hooks). Screen-detection agents
@@ -342,11 +465,13 @@ TAB: "task-name"
 └────────┴────────┴────────┴────────┴────────┘
 ```
 
-**When to use:**
+**IDENTIFY — ensure you have room for workers in the current tab:**
 
-- Many similar sub-tasks
-- A coordinator can distribute and collect efficiently
-- Workers are independent (disjoint slices)
+```bash
+herdr pane list --workspace <wid> --json
+pane_count=$(...)
+# If pane_count + worker_count > 5, consider batching workers in rounds
+```
 
 **What you do:**
 
@@ -367,11 +492,8 @@ reducing your coordination load.
 Every few seconds (or on demand), check the state of all sub-agents:
 
 ```bash
-# List all agents with their states
+# IDENTIFY — list all agents with their states
 herdr agent list --json
-
-# Or read recent state:
-herdr status --json
 ```
 
 **Sort by urgency:**
@@ -385,13 +507,13 @@ herdr status --json
 ### 4.2 Reading Sub-Agent Output
 
 ```bash
-# Read recent output from an agent
+# Verify agent exists, then read
 herdr agent read <agent-name> --lines 50
 
-# Read unwrapped (for parsing)
+# Unwrapped (for parsing)
 herdr agent read <agent-name> --source recent-unwrapped --lines 50
 
-# Read visible viewport
+# Visible viewport
 herdr agent read <agent-name> --source visible --lines 30
 ```
 
@@ -400,15 +522,10 @@ herdr agent read <agent-name> --source visible --lines 30
 When a sub-agent is `blocked` or needs input:
 
 ```bash
-# Send a message
-herdr agent send <agent-name> "<message>"
-
-# Send keystrokes (e.g., answer a y/n prompt)
-herdr pane send-keys <pane-id> "<key-sequence>"
-
-# Or read the pane, answer the question, then send
+# Read the prompt first (identify what's needed)
 herdr agent read <agent-name> --lines 30
-# ... read the prompt ...
+
+# Then act — send the answer
 herdr agent send <agent-name> "<answer>"
 ```
 
@@ -447,13 +564,9 @@ After all sub-agents reach `done`, read each one's output in your pane:
 ```
 # In your pane (the orchestrator):
 "Collecting results from all agents..."
-"Agent A output: [paste/summarize]"
-"Agent B output: [paste/summarize]"
-"Agent C output: [paste/summarize]"
+herdr agent read <name> --lines 100
+# ... repeat for each agent ...
 ```
-
-You can read them in any order. If you want the human to see them, paste summaries
-directly in your pane output.
 
 ### 5.2 Synthesizing the Result
 
@@ -481,13 +594,20 @@ Your pane output IS the final report. Structure it:
 
 ### 5.3 Cleaning Up
 
-If you created extra panes that are no longer needed:
+**IDENTIFY before closing anything:**
 
 ```bash
-herdr pane close <pane-id>
+# 1. Check which panes are yours (orchestrator) vs sub-agent panes
+herdr pane list --workspace <wid> --json
+
+# 2. Close sub-agent panes only (NOT your orchestrator pane)
+herdr pane close <sub-agent-pane-id>   # one at a time
 ```
 
-Or leave them — they're still visible in the tab, and the human can close them.
+**NEVER close the workspace** while the orchestrator pane is still in it.
+**NEVER close a workspace with working agents inside it.**
+
+Leave your orchestrator pane — it's the only one the human needs to see.
 
 ---
 
@@ -498,80 +618,97 @@ Or leave them — they're still visible in the tab, and the human can close them
 Screen-detection agents (Claude Code, Codex, etc.) may report `idle` when actually
 waiting at an unrecognized prompt.
 
-**What to do:**
+**IDENTIFY the truth:**
 
 ```bash
-# Check the pane's recent output
 herdr agent read <agent-name> --lines 30
-```
-
-If it's waiting at a prompt, answer it:
-
-```bash
-herdr agent send <agent-name> "<answer>"
+# If it's waiting at a prompt → ACT: answer it
+# If it's truly idle → let it sit or send a ping
 ```
 
 ### 6.2 Agent State Wrong
 
+**IDENTIFY why:**
+
 ```bash
-# Diagnose why an agent's state looks wrong
-herdr agent explain <agent-name> --json
+herdr agent explain <name> --json
+# Check manifest source, authority level, bottom buffer
 ```
-
-Then:
-
-1. Check the manifest source — is herdr matching the right agent?
-2. Check if it's Authority A or B
-3. If Authority B, check the live bottom buffer
-4. If herdr sees `tmux` instead of the agent, the agent is invisible to detection
 
 ### 6.3 Agent Blocked on a Non-UI Question
 
-If an agent is blocked on something that isn't a standard approval/question prompt,
-screen detection won't trigger `blocked` automatically. You must:
-
 ```bash
 herdr agent read <name> --lines 30
-# Read the question
+# Read the question, then answer
 herdr agent send <name> "<answer>"
 ```
 
 ### 6.4 Collision Detection
 
-If you detect that two agents are editing the same files:
+**IDENTIFY collision risk before deploying:**
 
 ```bash
-# Stop the agent that shouldn't be there
-herdr pane close <colliding-pane-id>
+# Before fan-out, confirm disjoint scopes
+Sub-agent A owns: src/auth/login.ts, src/auth/logout.ts
+Sub-agent B owns: src/auth/profile.ts, src/auth/settings.ts
+→ No overlap ✓
+
+Sub-agent A owns: src/api/
+Sub-agent B owns: src/api/
+→ Collision! ❌ — don't fan-out
 ```
 
-Then restructure your fan-out to have disjoint slices.
+If collision is detected:
+
+```bash
+# Act: stop the colliding agent and re-scope
+herdr agent send <later-agent> "Hold — you may collide with <other-agent>. Awaiting re-scope."
+```
 
 ### 6.5 Cascading Failure in a Pipeline
 
 If a pipeline agent reports `done` but the output is wrong:
 
-```
-Pipeline: implementer (done, wrong) → reviewer → fixer
-```
-
-**Option A:** Send the review findings back to the implementer:
-
 ```bash
-herdr agent send implementer "The reviewer found issues: <findings>. Fix them."
-```
+# IDENTIFY: read the output
+IMPL=$(herdr agent read implementer --lines 100)
 
-**Option B:** Create a fixer agent instead:
+# ACT: Option A — re-send to implementer
+herdr agent send implementer "The review found issues: <findings>. Fix them."
 
-```bash
-# Split a new pane for the fixer
+# ACT: Option B — create a fixer instead
 FIXER=$(herdr pane split <your-pane-id> --direction right --no-focus ...)
-herdr pane run "$FIXER" "hermes --task '<review-findings>'"
+herdr agent start "$FIXER" --name "fixer" --session "fix-sess"
+herdr agent send "fixer" "<review-findings>"
 ```
 
 ---
 
 ## Part 7 — Quick Reference
+
+### IDENTIFY Commands (Query Before Modify)
+
+```bash
+# Workspace
+herdr workspace list --json                    # All workspaces
+herdr workspace get <wid> --json               # Specific workspace
+
+# Tab
+herdr tab list --workspace <wid> --json         # Tabs in workspace
+herdr tab get <wid>:<tid> --json               # Specific tab
+
+# Pane
+herdr pane current --json                      # My current pane
+herdr pane list --workspace <wid> --json       # All panes in workspace
+herdr pane list --workspace <wid> --tab <tid> --json  # All panes in tab
+herdr pane get <pid> --json                    # Specific pane
+herdr pane layout --pane <pid> --json          # Layout of specific pane
+
+# Agent
+herdr agent list --json                        # All agents with states
+herdr agent get <name> --json                  # Specific agent
+herdr agent explain <name> --json              # Why state is X
+```
 
 ### Agent States
 
@@ -585,40 +722,38 @@ herdr pane run "$FIXER" "hermes --task '<review-findings>'"
 
 ### Pane ID Format
 
-- Workspace: `1`, `2`, `3`...
-- Tab: `1:1`, `1:2`, `2:1`...
-- Pane: `1-1`, `1-2`, `2-1`...
+- Workspace: `w1`, `wX`, `w14`... (randomized hex-like)
+- Tab: `w1:t1`, `w1:t2`...
+- Pane: `w1:p1`, `w1:p2`...
 
-### Common Commands (Confirm Live)
+### Modify Commands (After IDENTIFY + VERIFY)
 
 ```bash
 # Workspace
-herdr workspace create --cwd <path> --label <name> --no-focus
-herdr workspace focus <id>
+herdr workspace create --cwd <path> --label <name> --no-focus     # Only if no existing WS works
 herdr workspace rename <id> <name>
+herdr workspace close <id>                                          # DANGEROUS — only when human confirms
 
 # Tab
 herdr tab create --workspace <wid> --label <name> --no-focus
-herdr tab focus <wid>:<tid>
+herdr tab rename <wid>:<tid> <name>
+herdr tab close <wid>:<tid>
 
 # Pane
-herdr pane split <pid> --direction right --no-focus
+herdr pane split <pid> --direction right --no-focus               # Always from YOUR pane
 herdr pane run <pid> "<command>"
-herdr pane read <pid> --lines 50
 herdr pane send-keys <pid> "<keys>"
+herdr pane resize <pid> --ratio 0.35
 herdr pane close <pid>
 
 # Agent
-herdr agent list --json
-herdr agent read <name> --lines 50
+herdr agent start <pid> --name <label> --session <id>
 herdr agent send <name> "<message>"
 herdr agent wait <name> --status done --timeout 120000
 herdr agent explain <name> --json
-herdr agent start <pid> --name <label> --session <id>
 
 # Wait
 herdr wait output <pid> --match "<text>" --timeout 30000
-herdr wait agent-status <pid> --status done --timeout 120000
 
 # Notification
 herdr notification show "<title>" --body "<text>" --sound <done|request|none>
@@ -639,20 +774,22 @@ herdr notification show "<title>" --body "<text>" --sound <done|request|none>
 
 ## Part 8 — Design Principles
 
-1. **Your pane is the command center.** Keep it wide. The human watches your reasoning.
-2. **One sub-agent per pane.** Don't cram multiple agents into one pane.
-3. **3-4 panes max per tab.** If you need more, split across tabs (only if the human
-   wants to switch tabs, which defeats the purpose). Otherwise, break the task into
-   multiple orchestration rounds.
-4. **Name your agents.** Pane IDs are not durable. Agent names are.
-5. **`done` ≠ correct.** Always read the pane output before feeding it downstream.
-6. **`blocked` = urgent.** Something is waiting on input. Route it quickly.
-7. **Use `--no-focus`.** Don't yank the user's terminal focus around when scripting.
-8. **Disjoint slices or one agent.** If sub-tasks touch the same files, don't fan out.
-9. **Prefer Authority-A agents for pipeline gates.** Screen-detection agents may report
-   `idle` when stuck, causing silent hangs in your pipeline.
-10. **Alert at milestones, not per-step.** One notification when the fleet is done or
-    the first agent is blocked. Not after every sub-task completes.
+1. **IDENTIFY before you act.** Every single operation starts with a query.
+2. **Use the current workspace/tab by default.** Only create new ones when needed.
+3. **NEVER close a workspace mid-orchestration** without human confirmation.
+4. **Your pane is the command center.** Keep it wide. The human watches your reasoning.
+5. **One sub-agent per pane.** Don't cram multiple agents into one pane.
+6. **3-4 panes max per tab.** If you need more, split across tabs.
+7. **Name your agents.** Pane IDs are not durable. Agent names are.
+8. **`done` ≠ correct.** Always read the pane output before feeding it downstream.
+9. **`blocked` = urgent.** Something is waiting on input. Route it quickly.
+10. **Use `--no-focus`.** Don't yank the user's terminal focus around when scripting.
+11. **Disjoint slices or one agent.** If sub-tasks touch the same files, don't fan out.
+12. **Prefer Authority-A agents for pipeline gates.** Screen-detection agents may report
+    `idle` when stuck, causing silent hangs in your pipeline.
+13. **Alert at milestones, not per-step.** One notification when the fleet is done or
+    the first agent is blocked.
+14. **Close only sub-agent panes during cleanup.** Never close your orchestrator pane or the workspace.
 
 ---
 
@@ -661,16 +798,14 @@ herdr notification show "<title>" --body "<text>" --sound <done|request|none>
 For deep dives, see the reference files in this skill's `references/` directory:
 
 - **`references/pane-orchestration.md`** — Tab-internal pane layout design, sizing, and
-  arrangement patterns. When to use 2/3/4 panes, resize mid-run, and common mistakes.
+  arrangement patterns.
 - **`references/sub-agent-design.md`** — How to design sub-tasks, brief sub-agents,
-  manage them during execution, and handle handoffs between agents.
-- **`references/tab-management.md`** — Single-tab vs multi-tab orchestration, tab creation
-  during orchestration, and tab best practices.
+  manage them during execution, and handle handoffs.
+- **`references/tab-management.md`** — Single-tab vs multi-tab orchestration.
 - **`references/monitoring.md`** — Real-time monitoring, the triage loop, state-based
   alerting, and stalled detection.
-- **`references/failure-handling.md`** — 8 failure modes (stuck agents, wrong state,
-  collisions, pipeline breaks, cascade failures), recovery strategies, and escalation
-  framework.
+- **`references/failure-handling.md`** — 8 failure modes, recovery strategies, and
+  escalation framework.
 
 **When you need more detail than this master skill provides, read the appropriate
 reference file. This skill is your quick-reference; the references are your deep-dive.**

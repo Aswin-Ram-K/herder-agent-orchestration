@@ -91,7 +91,8 @@ def setup_test_env():
     print("✓ Copy verified: SKILL.md has valid frontmatter")
 
     ref_count = sum(
-        1 for _ in os.scandir(os.path.join(TEST_SKILL_PATH, "references"))
+        1
+        for _ in os.scandir(os.path.join(TEST_SKILL_PATH, "references"))
         if _.is_file() and _.name.endswith(".md")
     )
     print(f"✓ Copy verified: {ref_count} reference files copied")
@@ -115,10 +116,15 @@ def cleanup_test_env():
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(description="Test clean environment setup")
     parser.add_argument("--setup", action="store_true", help="Create test environment")
-    parser.add_argument("--cleanup", action="store_true", help="Remove test environment")
-    parser.add_argument("--both", action="store_true", help="Setup then cleanup (run test)")
+    parser.add_argument(
+        "--cleanup", action="store_true", help="Remove test environment"
+    )
+    parser.add_argument(
+        "--both", action="store_true", help="Setup then cleanup (run test)"
+    )
     args = parser.parse_args()
 
     if args.setup or args.both:
